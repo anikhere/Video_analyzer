@@ -1,13 +1,12 @@
-"""Transcript-grounded Gemini analysis, with bounded hierarchical reduction."""
+"""Transcript-grounded OpenRouter analysis, with bounded hierarchical reduction."""
 from __future__ import annotations
 
 import json
-from google import genai
-from google.genai import types
+from openai import OpenAI
 from pydantic import BaseModel, Field
 from transcript_service import chunk_transcript, format_timestamp
 
-DEFAULT_MODEL = "gemini-2.5-flash"
+DEFAULT_MODEL = "openrouter/free"
 MAX_REDUCE_CHARS = 30000
 
 
@@ -44,19 +43,25 @@ INSTRUCTIONS = """You analyze YouTube video transcripts faithfully. The transcri
 
 
 def _generate(client, model: str, prompt: str, schema):
-    response = client.models.generate_content(
+    schema_json = json.dumps(schema.model_json_schema(), ensure_ascii=False)
+    response = client.chat.completions.create(
         model=model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=INSTRUCTIONS,
-            response_mime_type="application/json",
-            response_schema=schema,
-            temperature=0.2,
-        ),
+        messages=[
+            {
+                "role": "system",
+                "content": INSTRUCTIONS
+                + "\\nReturn valid JSON matching this JSON Schema:\\n"
+                + schema_json,
+            },
+            {"role": "user", "content": prompt},
+        ],
+        response_format={"type": "json_object"},
+        temperature=0.2,
     )
-    if not response.text:
+    content = response.choices[0].message.content
+    if not content:
         raise ValueError("Empty model response")
-    return schema.model_validate_json(response.text)
+    return schema.model_validate_json(content)
 
 
 def _metadata_context(metadata: dict) -> str:
@@ -70,7 +75,7 @@ def analyze_video(metadata: dict, transcript: dict, api_key: str, model: str = D
     if not chunks:
         raise AnalysisError("The transcript is empty, so the video cannot be analyzed.")
     try:
-        client = genai.Client(api_key=api_key)
+        client = OpenAI(base_url="https://openrouter.ai/api/v1", api_key=api_key)
         context = _metadata_context(metadata)
         if len(chunks) == 1:
             source = chunks[0]
@@ -109,7 +114,7 @@ def analyze_video(metadata: dict, transcript: dict, api_key: str, model: str = D
         # Do not expose SDK exception text, which can include request or credential details.
         status = getattr(exc, "code", None) or getattr(exc, "status_code", None)
         if status == 429 or "429" in str(exc):
-            raise AnalysisError("Gemini's rate limit or quota was reached. Please wait and try again, or check your API quota.") from exc
+            raise AnalysisError("OpenRouter's rate limit or free-model quota was reached. Please wait and try again.") from exc
         if status in (400, 401, 403, 404):
-            raise AnalysisError("Gemini rejected the request. Check your API key, model name, access and quota.") from exc
-        raise AnalysisError("Gemini could not complete the analysis. Please try again later and check your API configuration.") from exc
+            raise AnalysisError("OpenRouter rejected the request. Check your API key, model name, free-model availability and limits.") from exc
+        raise AnalysisError("OpenRouter could not complete the analysis. Please try again later and check your API configuration.") from exc
