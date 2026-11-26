@@ -56,6 +56,8 @@ export function App() {
   const [loading, setLoading] = useState(false);
   const [initialLoading, setInitialLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [showPasteBox, setShowPasteBox] = useState(false);
+  const [manualTranscript, setManualTranscript] = useState('');
 
   const [seekState, setSeekState] = useState<{ seconds: number; nonce: number }>({
     seconds: 0,
@@ -152,14 +154,21 @@ export function App() {
           model: settings.model,
           api_key: settings.apiKey || undefined,
           yt_key: settings.ytKey || undefined,
+          manual_transcript: manualTranscript.trim() || undefined,
         }),
       });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(body.detail || 'Video analysis failed. Check your URL and API key.');
+        const msg = body.detail || 'Video analysis failed. Check your URL and API key.';
+        if (msg.toLowerCase().includes('blocked')) {
+          setShowPasteBox(true);
+        }
+        throw new Error(msg);
       }
       setActiveSampleId('');
       setSeekState({ seconds: 0, nonce: 0 });
+      setManualTranscript('');
+      setShowPasteBox(false);
       setDashboard(body);
     } catch (err: any) {
       setError(err.message || 'Unable to analyze video.');
@@ -384,15 +393,57 @@ export function App() {
                 <AlertCircle className="w-4 h-4 text-red-300 shrink-0" />
                 <span>{error}</span>
               </div>
-              {error.includes('API') && (
-                <button
-                  type="button"
-                  onClick={() => setSettingsOpen(true)}
-                  className="px-3 py-1.5 rounded-lg bg-white text-[#07132E] font-bold text-xs hover:bg-blue-50 transition shrink-0"
-                >
-                  Configure API Key
-                </button>
-              )}
+              <div className="flex items-center gap-2 shrink-0">
+                {error.toLowerCase().includes('blocked') && (
+                  <button
+                    type="button"
+                    onClick={() => setShowPasteBox((v) => !v)}
+                    className="px-3 py-1.5 rounded-lg bg-blue-600 text-white font-bold text-xs hover:bg-blue-500 transition"
+                  >
+                    {showPasteBox ? 'Hide Paste Box' : 'Paste Transcript'}
+                  </button>
+                )}
+                {(error.includes('API') || error.toLowerCase().includes('gemini')) && (
+                  <button
+                    type="button"
+                    onClick={() => setSettingsOpen(true)}
+                    className="px-3 py-1.5 rounded-lg bg-white text-[#07132E] font-bold text-xs hover:bg-blue-50 transition"
+                  >
+                    Switch to Gemini / API Settings
+                  </button>
+                )}
+              </div>
+            </div>
+          )}
+
+          {/* Optional Paste Transcript Drawer for Cloud-IP Blocked OpenRouter Hosts */}
+          <div className="mt-2.5 flex items-center justify-end">
+            <button
+              type="button"
+              onClick={() => setShowPasteBox((v) => !v)}
+              className="text-[11px] text-blue-200/75 hover:text-white underline underline-offset-4"
+            >
+              {showPasteBox ? 'Hide manual transcript input' : 'Cloud IP blocked on YouTube? Paste transcript manually'}
+            </button>
+          </div>
+
+          {showPasteBox && (
+            <div className="mt-3 rounded-xl bg-[#07132E] border border-blue-300/25 p-4 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-bold text-white">
+                  Manual Transcript Fallback (Works on Any Cloud Server)
+                </span>
+                <span className="text-blue-200/75">
+                  On YouTube: click &ldquo;…more&rdquo; → &ldquo;Show transcript&rdquo; → Copy &amp; paste here
+                </span>
+              </div>
+              <textarea
+                rows={4}
+                value={manualTranscript}
+                onChange={(e) => setManualTranscript(e.target.value)}
+                placeholder="Paste YouTube transcript lines (with or without timestamps) and click Analyze Video above..."
+                className="w-full p-3 rounded-xl bg-[#050C1E] border border-blue-300/25 focus:border-white focus:outline-none text-xs text-white placeholder-blue-200/45 font-mono"
+              />
             </div>
           )}
         </section>

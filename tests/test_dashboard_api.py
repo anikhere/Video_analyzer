@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 import api
 from analytics_service import build_dashboard_analytics
 from llm_service import analyze_video_dashboard
-from transcript_service import compact_segments
+from transcript_service import TranscriptBlockedError, compact_segments, parse_pasted_transcript
 from youtube_service import duration_to_seconds, fetch_video_metadata_smart, seconds_to_iso_duration
 
 VID = "dQw4w9WgXcQ"
@@ -212,6 +212,68 @@ class FastApiEndpointTests(unittest.TestCase):
             self.assertEqual(mock_llm.call_count, 1)
             self.assertEqual(mock_trans.call_count, 1)
             self.assertEqual(mock_meta.call_count, 1)
+
+    @patch("api.fetch_video_metadata_smart")
+    @patch("api.get_transcript")
+    @patch("api.analyze_youtube_url_via_gemini")
+    def test_cloud_ip_block_automatically_falls_back_to_gemini_direct_url(self, mock_gemini_direct, mock_trans, mock_meta):
+        mock_meta.return_value = (
+            {
+                "id": VID,
+                "title": "Render Cloud Video",
+                "channel": "Creator",
+                "description": "",
+                "published_at": "",
+                "thumbnail": "https://example.com/t.jpg",
+                "duration": "PT2M",
+                "duration_seconds": 120,
+                "view_count": None,
+                "like_count": None,
+                "comment_count": None,
+                "metadata_source": "oembed",
+                "url": f"https://www.youtube.com/watch?v={VID}",
+            },
+            0,
+        )
+        mock_trans.side_effect = TranscriptBlockedError("YouTube blocked cloud IP")
+        mock_gemini_direct.return_value = (
+            {
+                "tldr": "Direct Gemini bypass works on Render.",
+                "content_type": "Deep Dive",
+                "summary": "Summary from direct video ingestion.",
+                "premise": "Cloud IPs are blocked by YouTube scraper.",
+                "core_breakdown": "Gemini reads YouTube directly.",
+                "topics": ["Cloud Deployment"],
+                "key_takeaways": ["No proxy required with Gemini."],
+                "chapters": [{"start_time": "00:00", "title": "Start", "summary": "Intro"}],
+                "timestamps": [{"time": "00:10", "explanation": "Key point"}],
+                "action_items": ["Set GEMINI_API_KEY"],
+                "audience": "Teams",
+                "terminology": [{"term": "Cloud IP", "explanation": "Datacenter network"}],
+                "conclusion": "Solved.",
+            },
+            {
+                "segments": [{"start": 0.0, "duration": 15.0, "text": "Direct Gemini audio transcript segment."}],
+                "language": "English (Direct Audio/Video)",
+                "language_code": "en",
+                "is_generated": True,
+            },
+            1,
+        )
+        res = self.client.post(
+            "/api/analyze",
+            json={"url": f"https://youtu.be/{VID}", "provider": "gemini", "api_key": "gem-key", "force_refresh": True},
+        )
+        self.assertEqual(res.status_code, 200)
+        self.assertEqual(res.json()["analysis"]["tldr"], "Direct Gemini bypass works on Render.")
+        mock_gemini_direct.assert_called_once()
+
+    def test_parse_pasted_transcript_handles_two_line_youtube_format(self):
+        raw = "0:00\nWelcome everyone to the video briefing.\n0:14\nHere is the second spoken timestamped block."
+        parsed = parse_pasted_transcript(raw)
+        self.assertEqual(len(parsed["segments"]), 2)
+        self.assertEqual(parsed["segments"][0]["start"], 0.0)
+        self.assertEqual(parsed["segments"][1]["start"], 14.0)
 
 
 if __name__ == "__main__":
