@@ -12,7 +12,13 @@ from pydantic import BaseModel, Field, ValidationError
 from transcript_service import chunk_transcript, compact_segments, format_timestamp, timestamp_to_seconds
 
 DEFAULT_MODEL = "openrouter/free"
-GEMINI_DEFAULT_MODEL = "gemini-2.5-flash"
+# gemini-2.5-flash returns 404 "no longer available to new users" for keys/
+# projects that never used 2.5 before (Google restricted 2.5 in Oct 2026).
+# gemini-3.5-flash-lite is Google's routing target for 2.5-flash and works
+# for new keys. Override via GEMINI_MODEL env (e.g. on Render).
+GEMINI_DEFAULT_MODEL = "gemini-3.5-flash-lite"
+# Tried in order when the requested model 404s (retired / not available).
+GEMINI_FALLBACK_MODELS = ("gemini-3.5-flash-lite", "gemini-3.8-flash", "gemini-flash-lite-latest")
 MAX_REDUCE_CHARS = 30000
 SINGLE_PASS_MAX_CHARS = 95000
 FAST_CHUNK_CHARS = 48000
@@ -222,6 +228,24 @@ def _is_gemini_surface_mismatch_error(exc: Exception) -> bool:
     return True
 
 
+def _is_model_not_found_error(exc: Exception) -> bool:
+    """True for 404s meaning the model id is retired / unavailable to this key."""
+    code, status, message = _extract_error_info(exc)
+    if code != 404 and (status or "").upper() != "NOT_FOUND":
+        return False
+    lowered = message.lower()
+    return any(
+        hint in lowered
+        for hint in (
+            "not found",
+            "no longer available",
+            "not supported for generatecontent",
+            "was not found or your project does not have access",
+            "is not found for api version",
+        )
+    )
+
+
 def _clean_json_text(raw: str) -> str:
     text = raw.strip()
     if text.startswith("```"):
@@ -253,6 +277,18 @@ def _generate(client, model: str, prompt: str, schema, provider: str, api_key: s
         except AnalysisError:
             raise
         except Exception as exc:
+            # Retired/unavailable model (e.g. gemini-2.5-flash 404s for new
+            # keys): try current fallback models on the same surface.
+            if _is_model_not_found_error(exc):
+                for fallback_model in GEMINI_FALLBACK_MODELS:
+                    if fallback_model == model:
+                        continue
+                    try:
+                        return _gemini_generate_once(client, fallback_model, prompt, schema)
+                    except AnalysisError:
+                        raise
+                    except Exception:
+                        continue
             # One retry on the other Google surface: an AI Studio key sent to
             # Vertex (or vice versa) fails with 403 PERMISSION_DENIED, and the
             # prefix alone cannot tell which surface a key belongs to.
@@ -349,7 +385,7 @@ def _handle_llm_exception(exc: Exception, provider: str, model: str | None = Non
             elif "model" in lowered and any(h in lowered for h in ("not found", "not available", "permission", "not supported")):
                 message = (
                     f"Gemini denied access to model '{model or GEMINI_DEFAULT_MODEL}' (403). "
-                    "Your key/region/tier may not include it. Try 'gemini-2.5-flash-lite' or 'gemini-2.5-flash', "
+                    "Your key/region/tier may not include it. Try 'gemini-3.5-flash-lite' or 'gemini-3.8-flash', "
                     "or switch to OpenRouter (free models) in API Settings."
                 )
             else:
@@ -371,10 +407,19 @@ def _handle_llm_exception(exc: Exception, provider: str, model: str | None = Non
     elif code == 429:
         message = f"{name} rate limit or quota reached (429). Wait and try again, or check your account limits."
     elif code == 404:
-        message = (
-            f"{name} could not find the model (404). Check the model name{model_hint} "
-            "and that your account has access to it."
-        )
+        if provider == "gemini":
+            message = (
+                f"Gemini could not find model '{model or GEMINI_DEFAULT_MODEL}' (404). "
+                "Google retired gemini-2.5-flash for new keys/projects — use 'gemini-3.5-flash-lite' instead. "
+                "On Render: Dashboard → Environment → set GEMINI_MODEL=gemini-3.5-flash-lite → Save → "
+                "Manual Deploy → Deploy latest commit. Locally: set GEMINI_MODEL in .env, or change it in "
+                "API Settings (top right). The app already tries fallback models automatically."
+            )
+        else:
+            message = (
+                f"{name} could not find the model (404). Check the model name{model_hint} "
+                "and that your account has access to it."
+            )
     elif code == 400:
         message = f"{name} rejected the request (400). Check the model name{model_hint} and whether it supports JSON output."
     elif code in (502, 503, 504):
@@ -668,9 +713,9 @@ def analyze_youtube_url_via_gemini(
         "Do not fabricate claims."
     )
 
-    def _direct_generate(client):
+    def _direct_generate(client, use_model: str):
         return client.models.generate_content(
-            model=model,
+            model=use_model,
             contents=[
                 types.Part.from_uri(file_uri=watch_url, mime_type="video/mp4"),
                 prompt,
@@ -686,16 +731,29 @@ def analyze_youtube_url_via_gemini(
     try:
         client = _make_gemini_client(clean_key)
         try:
-            response = _direct_generate(client)
+            response = _direct_generate(client, model)
         except Exception as exc:
-            if not _is_gemini_surface_mismatch_error(exc):
+            if _is_model_not_found_error(exc):
+                response = None
+                for fallback_model in GEMINI_FALLBACK_MODELS:
+                    if fallback_model == model:
+                        continue
+                    try:
+                        response = _direct_generate(client, fallback_model)
+                        break
+                    except Exception:
+                        continue
+                if response is None:
+                    raise exc
+            elif _is_gemini_surface_mismatch_error(exc):
+                try:
+                    primary_vertex = bool(getattr(client, "vertexai", _vertex_requested()))
+                except Exception:
+                    primary_vertex = _vertex_requested()
+                fallback_client = _make_gemini_client(clean_key, use_vertex=not primary_vertex)
+                response = _direct_generate(fallback_client, model)
+            else:
                 raise
-            try:
-                primary_vertex = bool(getattr(client, "vertexai", _vertex_requested()))
-            except Exception:
-                primary_vertex = _vertex_requested()
-            fallback_client = _make_gemini_client(clean_key, use_vertex=not primary_vertex)
-            response = _direct_generate(fallback_client)
         if not response.text:
             raise AnalysisError("Gemini returned an empty response for this YouTube URL.")
         parsed = DirectYouTubeAnalysis.model_validate_json(_clean_json_text(response.text))

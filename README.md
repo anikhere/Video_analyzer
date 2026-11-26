@@ -102,13 +102,26 @@ through this checklist:
    your key → API restrictions must include **Generative Language API**
    (or **Vertex AI API** for Express keys). Unrestricted/old keys are now
    rejected by Google.
-4. **Check the model.** Confirm `gemini-2.5-flash` is available to your
-   key/region/tier — try `gemini-2.5-flash-lite` as a fallback.
+4. **Check the model.** `gemini-2.5-flash` returns 404 ("no longer available
+   to new users") for new keys/projects. Use `gemini-3.5-flash-lite` (default)
+   or `gemini-3.8-flash`. The app auto-tries fallback models on 404.
 5. **Vertex Express keys only.** If your `AQ....` key was issued specifically
    for Vertex, set `GOOGLE_GENAI_USE_VERTEXAI=true` in `.env` to route calls
    to `aiplatform.googleapis.com` directly.
 6. **Still stuck?** Switch to OpenRouter (free models) in API Settings — only
    one LLM key is ever required.
+
+### Gemini: `could not find the model (404)` on Render
+
+`gemini-2.5-flash` was retired for new keys in Oct 2026. Fix it via env —
+no code change needed:
+
+1. Render Dashboard → your service → **Environment**
+2. Set/add `GEMINI_MODEL=gemini-3.5-flash-lite` (or `gemini-3.8-flash`)
+3. **Save Changes** → **Manual Deploy** → **Deploy latest commit**
+
+Also check the dashboard's **API Settings** (top right) — a model saved there
+overrides the env var. Clear it or set it to `gemini-3.5-flash-lite` too.
 
 ---
 

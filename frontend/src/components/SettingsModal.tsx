@@ -107,7 +107,7 @@ export const SettingsModal: React.FC<Props> = ({
                   setDraft((d) => ({
                     ...d,
                     provider: 'gemini',
-                    model: serverConfig?.gemini_model || 'gemini-2.5-flash',
+                    model: serverConfig?.gemini_model || 'gemini-3.5-flash-lite',
                   }))
                 }
                 className={`p-3 rounded-xl border text-left transition ${
@@ -176,7 +176,7 @@ export const SettingsModal: React.FC<Props> = ({
               type="text"
               value={draft.model}
               onChange={(e) => setDraft((d) => ({ ...d, model: e.target.value }))}
-              placeholder={draft.provider === 'openrouter' ? 'openrouter/free' : 'gemini-2.5-flash'}
+              placeholder={draft.provider === 'openrouter' ? 'openrouter/free' : 'gemini-3.5-flash-lite'}
               className="w-full px-3.5 py-2.5 rounded-xl bg-[#07122B] border border-blue-300/25 focus:border-white focus:outline-none text-sm text-white font-mono"
             />
           </div>
