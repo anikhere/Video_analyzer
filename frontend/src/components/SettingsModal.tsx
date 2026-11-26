@@ -144,10 +144,27 @@ export const SettingsModal: React.FC<Props> = ({
               placeholder={
                 hasEnvKeyForSelected
                   ? 'Using server .env key (leave blank or paste override)...'
-                  : `Paste your ${draft.provider === 'openrouter' ? 'sk-or-v1-...' : 'AIza...'} key`
+                  : `Paste your ${draft.provider === 'openrouter' ? 'sk-or-v1-...' : 'AIza... or AQ....'} key`
               }
               className="w-full px-3.5 py-2.5 rounded-xl bg-[#07122B] border border-blue-300/25 focus:border-white focus:outline-none text-sm text-white placeholder-blue-200/45 font-mono"
             />
+            {draft.provider === 'gemini' && draft.apiKey.trim().startsWith('sk-or-') && (
+              <p className="mt-1.5 text-[11px] text-amber-300">
+                This looks like an OpenRouter key — Gemini needs an AI Studio key (AIza... or AQ....).
+              </p>
+            )}
+            {draft.provider === 'openrouter' &&
+              (draft.apiKey.trim().startsWith('AIza') || draft.apiKey.trim().startsWith('AQ.')) && (
+                <p className="mt-1.5 text-[11px] text-amber-300">
+                  This looks like a Gemini key — OpenRouter needs a sk-or-... key.
+                </p>
+              )}
+            {draft.provider === 'gemini' && (
+              <p className="mt-1.5 text-[11px] text-blue-200/70">
+                Both AIza... and AQ.... keys work. Getting 403? Create a fresh key at aistudio.google.com/apikey
+                and enable &ldquo;Generative Language API&rdquo; for its project.
+              </p>
+            )}
           </div>
 
           {/* Model ID */}

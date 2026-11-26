@@ -19,6 +19,9 @@ from llm_service import (
     AnalysisError,
     DEFAULT_MODEL,
     GEMINI_DEFAULT_MODEL,
+    _clean_api_key,
+    _normalize_gemini_model,
+    _validate_provider_key,
     analyze_video_dashboard,
     analyze_youtube_url_via_gemini,
 )
@@ -200,9 +203,11 @@ def analyze_endpoint(req: AnalyzeRequest) -> dict:
     default_model = DEFAULT_MODEL if provider == "openrouter" else GEMINI_DEFAULT_MODEL
     env_model_var = "OPENROUTER_MODEL" if provider == "openrouter" else "GEMINI_MODEL"
     model = (req.model or _env_setting(env_model_var) or default_model).strip()
+    if provider == "gemini":
+        model = _normalize_gemini_model(model)
 
     env_key_var = "OPENROUTER_API_KEY" if provider == "openrouter" else "GEMINI_API_KEY"
-    llm_key = (req.api_key or "").strip() or _env_setting(env_key_var)
+    llm_key = _clean_api_key(req.api_key) or _env_setting(env_key_var)
     yt_key = (req.yt_key or "").strip() or _env_setting("YT_KEY")
 
     if not llm_key:
@@ -211,6 +216,13 @@ def analyze_endpoint(req: AnalyzeRequest) -> dict:
             status_code=400,
             detail=f"Missing {key_label}. Add it in API Settings (top right) or in your .env file. (Note: YT_KEY is optional!)",
         )
+
+    # Fail fast (400, not a confusing upstream 403/502) when the pasted key
+    # clearly belongs to the other provider.
+    try:
+        llm_key = _validate_provider_key(provider, llm_key)
+    except AnalysisError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
     key_fingerprint = hashlib.sha256(f"{provider}:{model}:{bool(yt_key)}".encode("utf-8")).hexdigest()[:16]
     cache_key = f"v2:{video_id}:{key_fingerprint}"
@@ -251,7 +263,7 @@ def analyze_endpoint(req: AnalyzeRequest) -> dict:
                     fallback_gemini_key = llm_key if provider == "gemini" else _env_setting("GEMINI_API_KEY")
                     if not fallback_gemini_key:
                         raise blocked_exc
-                    gemini_model = model if provider == "gemini" else (_env_setting("GEMINI_MODEL") or GEMINI_DEFAULT_MODEL)
+                    gemini_model = model if provider == "gemini" else _normalize_gemini_model(_env_setting("GEMINI_MODEL") or GEMINI_DEFAULT_MODEL)
                     analysis, raw_transcript, llm_calls = analyze_youtube_url_via_gemini(
                         metadata=metadata,
                         video_id=video_id,
