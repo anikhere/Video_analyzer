@@ -23,6 +23,7 @@ from youtube_service import YouTubeError, extract_video_id, fetch_video_metadata
 load_dotenv()
 
 ROOT_DIR = Path(__file__).resolve().parent
+STATIC_DIR = ROOT_DIR / "static"
 DIST_DIR = ROOT_DIR / "frontend" / "dist"
 CACHE_DIR = ROOT_DIR / ".cache"
 CACHE_DB = CACHE_DIR / "video_dashboard_cache.sqlite"
@@ -278,12 +279,13 @@ def analyze_endpoint(req: AnalyzeRequest) -> dict:
 def serve_spa(full_path: str):
     if full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="API endpoint not found.")
-    if not DIST_DIR.exists():
-        raise HTTPException(status_code=404, detail="Frontend build not found. Run `npm run build` in frontend/.")
-    candidate = (DIST_DIR / full_path).resolve()
-    if full_path and candidate.is_file() and str(candidate).startswith(str(DIST_DIR)):
+    ui_dir = STATIC_DIR if (STATIC_DIR / "index.html").is_file() else DIST_DIR
+    if not ui_dir.exists():
+        raise HTTPException(status_code=404, detail="Frontend assets not found.")
+    candidate = (ui_dir / full_path).resolve()
+    if full_path and candidate.is_file() and str(candidate).startswith(str(ui_dir)):
         return FileResponse(str(candidate))
-    index_file = DIST_DIR / "index.html"
+    index_file = ui_dir / "index.html"
     if index_file.is_file():
         return FileResponse(str(index_file))
     raise HTTPException(status_code=404, detail="Frontend build not found.")
