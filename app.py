@@ -187,14 +187,14 @@ if submitted:
     try:
         video_id = extract_video_id(url)
         yt_key = setting("YT_KEY")
-        gemini_key = setting("GEMINI_API_KEY")
-        if not yt_key or not gemini_key:
-            raise ValueError("Add YT_KEY and GEMINI_API_KEY to your .env file or Streamlit secrets before analyzing. See the README for setup.")
+        openrouter_key = setting("OPENROUTER_API_KEY")
+        if not yt_key or not openrouter_key:
+            raise ValueError("Add YT_KEY and OPENROUTER_API_KEY to your .env file or Streamlit secrets before analyzing. See the README for setup.")
         with st.spinner("Fetching video details and captions, then preparing your analysis. Longer videos may take a few minutes…"):
             metadata = cached_metadata(video_id, yt_key)
             st.session_state["metadata"] = metadata
             transcript = cached_transcript(video_id)
-            analysis = cached_analysis(metadata, transcript, gemini_key, setting("GEMINI_MODEL", DEFAULT_MODEL))
+            analysis = cached_analysis(metadata, transcript, openrouter_key, setting("OPENROUTER_MODEL", DEFAULT_MODEL))
             st.session_state["result"] = (metadata, transcript, analysis)
     except (ValueError, YouTubeError, TranscriptError, AnalysisError) as exc:
         st.session_state["error"] = str(exc)
