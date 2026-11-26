@@ -50,7 +50,7 @@ def _generate(client, model: str, prompt: str, schema):
             {
                 "role": "system",
                 "content": INSTRUCTIONS
-                + "\\nReturn valid JSON matching this JSON Schema:\\n"
+                + "\nReturn valid JSON matching this JSON Schema:\n"
                 + schema_json,
             },
             {"role": "user", "content": prompt},
