@@ -80,6 +80,38 @@ cd frontend && npm run dev
 
 ---
 
+## Troubleshooting
+
+### Gemini: `denied access (403)` / `PERMISSION_DENIED`
+
+This is almost always a key/surface mismatch, not a code bug. Google now issues
+`AQ....` keys for **both** AI Studio and Vertex AI Express, so the prefix alone
+doesn't tell which endpoint a key belongs to. The app defaults to AI Studio
+(`generativelanguage.googleapis.com`) and auto-retries once on Vertex
+(`aiplatform.googleapis.com`) if Google returns 403 — if it still fails, work
+through this checklist:
+
+1. **Fresh key, pasted cleanly.** Create a new key at
+   <https://aistudio.google.com/apikey> (`AIza...` and `AQ....` both work).
+   Paste it with no spaces, quotes, or `Bearer ` prefix. Don't paste an
+   OpenRouter `sk-or-...` key here (and vice versa).
+2. **Enable the API.** Cloud Console → APIs & Services → Library → enable
+   **Generative Language API** for the key's Google Cloud project (for Vertex
+   Express keys, enable **Vertex AI API** instead). Wait 1–2 minutes.
+3. **Check key restrictions.** Cloud Console → APIs & Services → Credentials →
+   your key → API restrictions must include **Generative Language API**
+   (or **Vertex AI API** for Express keys). Unrestricted/old keys are now
+   rejected by Google.
+4. **Check the model.** Confirm `gemini-2.5-flash` is available to your
+   key/region/tier — try `gemini-2.5-flash-lite` as a fallback.
+5. **Vertex Express keys only.** If your `AQ....` key was issued specifically
+   for Vertex, set `GOOGLE_GENAI_USE_VERTEXAI=true` in `.env` to route calls
+   to `aiplatform.googleapis.com` directly.
+6. **Still stuck?** Switch to OpenRouter (free models) in API Settings — only
+   one LLM key is ever required.
+
+---
+
 ## Tests
 
 ```bash
