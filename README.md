@@ -41,17 +41,30 @@ OPENROUTER_MODEL=openrouter/free
 # YT_KEY=your_youtube_data_api_key
 ```
 
-### 2. Build Frontend & Start Unified Server
+### 2. Start the Dashboard Server (No Node.js Required!)
+
+The production React UI is pre-built in `static/`, so you can launch the full dashboard immediately with Python alone:
+
+```bash
+# macOS / Linux
+.venv/bin/uvicorn api:app --host 127.0.0.1 --port 8000
+
+# Windows PowerShell
+.\.venv\Scripts\python.exe -m uvicorn api:app --host 127.0.0.1 --port 8000
+```
+
+Open `http://127.0.0.1:8000` to view the full dashboard (pre-loaded with instant zero-API sample reports so you can explore immediately).
+
+### Optional: Rebuild Frontend After Editing React Source (`frontend/`)
+
+If you modify files inside `frontend/src/` (requires Node.js 18+):
 
 ```bash
 cd frontend
 npm install
-npm run build
+npm run build   # outputs updated bundle directly into ../static
 cd ..
-.venv/bin/uvicorn api:app --host 0.0.0.0 --port 8000
 ```
-
-Open `http://localhost:8000` to view the full dashboard (pre-loaded with instant zero-API sample reports so you can explore immediately).
 
 ### Frontend Hot-Reload Development Mode
 
