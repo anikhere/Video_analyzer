@@ -26,6 +26,17 @@ import { buildMarkdownReport } from './utils/exportMarkdown';
 
 const STORAGE_KEY = 'video_analyzer_runtime_settings_v2';
 
+// Retired Gemini models that 404 for new keys — auto-migrate saved settings.
+const RETIRED_GEMINI_MODELS = new Set([
+  'gemini-2.5-flash',
+  'gemini-2.5-pro',
+  'gemini-2.5-flash-lite',
+  'gemini-2.0-flash',
+  'gemini-2.0-flash-lite',
+  'gemini-1.5-flash',
+  'gemini-1.5-pro',
+]);
+
 function loadSavedSettings(): RuntimeSettings {
   try {
     const raw = sessionStorage.getItem(STORAGE_KEY);
@@ -79,16 +90,21 @@ export function App() {
         if (!cancelled && cfgRes.ok) {
           const cfg: ServerConfig = await cfgRes.json();
           setServerConfig(cfg);
-          setSettings((prev) => ({
-            ...prev,
-            provider: prev.apiKey ? prev.provider : cfg.provider,
-            model:
-              prev.apiKey && prev.model
-                ? prev.model
-                : cfg.provider === 'gemini'
-                ? cfg.gemini_model
-                : cfg.openrouter_model,
-          }));
+          setSettings((prev) => {
+            const serverModel =
+              cfg.provider === 'gemini' ? cfg.gemini_model : cfg.openrouter_model;
+            // A model saved in the browser overrides the server env (e.g. on
+            // Render) — but never keep a retired Gemini model that 404s.
+            const keepSaved =
+              prev.apiKey &&
+              prev.model &&
+              !(prev.provider === 'gemini' && RETIRED_GEMINI_MODELS.has(prev.model.trim()));
+            return {
+              ...prev,
+              provider: prev.apiKey ? prev.provider : cfg.provider,
+              model: keepSaved ? prev.model : serverModel,
+            };
+          });
         }
         if (!cancelled && sampRes.ok) {
           const sampData = await sampRes.json();

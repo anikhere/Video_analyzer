@@ -11,9 +11,11 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from llm_service import (
+    GEMINI_DEFAULT_MODEL,
     AnalysisError,
     _clean_api_key,
     _handle_llm_exception,
+    _is_model_not_found_error,
     _make_gemini_client,
     _normalize_gemini_model,
     _validate_provider_key,
@@ -51,6 +53,10 @@ def _dashboard_result():
         "terminology": [],
         "conclusion": "Done",
     }
+
+
+def _not_found(message="model not found"):
+    return type("NotFoundError", (Exception,), {"code": 404, "status": "NOT_FOUND", "message": message})(message)
 
 
 def _forbidden(message="403 PERMISSION_DENIED. Requests to this API aiplatform.googleapis.com are blocked."):
@@ -94,9 +100,10 @@ class ClientSurfaceTests(unittest.TestCase):
         self.assertEqual(_clean_api_key(""), "")
 
     def test_normalize_model(self):
-        self.assertEqual(_normalize_gemini_model("models/gemini-2.5-flash"), "gemini-2.5-flash")
-        self.assertEqual(_normalize_gemini_model(""), "gemini-2.5-flash")
-        self.assertEqual(_normalize_gemini_model(" gemini-2.5-flash-lite "), "gemini-2.5-flash-lite")
+        self.assertEqual(_normalize_gemini_model("models/gemini-3.5-flash-lite"), "gemini-3.5-flash-lite")
+        self.assertEqual(_normalize_gemini_model(""), GEMINI_DEFAULT_MODEL)
+        self.assertEqual(_normalize_gemini_model(" gemini-3.8-flash "), "gemini-3.8-flash")
+        self.assertEqual(GEMINI_DEFAULT_MODEL, "gemini-3.5-flash-lite")
 
 
 class KeyValidationTests(unittest.TestCase):
@@ -189,6 +196,43 @@ class SurfaceFallbackTests(unittest.TestCase):
         self.assertEqual(calls, 1)
         self.assertEqual(result["tldr"], "Thesis.")
         mock_client.assert_called_once_with(vertexai=False, api_key="AQ.key")
+
+    @patch("llm_service.genai.Client")
+    def test_404_retired_model_falls_back_to_current_model(self, mock_client):
+        """gemini-2.5-flash is retired for new keys -> retry with a current model."""
+        client = MagicMock()
+        client.vertexai = False
+
+        def _generate(model, **kwargs):
+            if model == "gemini-2.5-flash":
+                raise _not_found(
+                    "This model models/gemini-2.5-flash is no longer available to new users. "
+                    "Please update your code to use models/gemini-3.8-flash."
+                )
+            return SimpleNamespace(text=json.dumps(_gemini_result()))
+
+        client.models.generate_content.side_effect = _generate
+        mock_client.return_value = client
+        transcript = {"segments": [{"start": 1, "duration": 1, "text": "Hello"}]}
+        with patch.dict(os.environ, {}, clear=False):
+            for var in ("GOOGLE_GENAI_USE_ENTERPRISE", "GOOGLE_GENAI_USE_VERTEXAI", "GEMINI_USE_VERTEXAI", "GEMINI_USE_ENTERPRISE"):
+                os.environ.pop(var, None)
+            result = analyze_video({"title": "T"}, transcript, "AIza.key", "gemini-2.5-flash", "gemini")
+        self.assertEqual(result["summary"], "A summary")
+        used = [c.kwargs["model"] for c in client.models.generate_content.call_args_list]
+        self.assertEqual(used[0], "gemini-2.5-flash")
+        self.assertIn("gemini-3.5-flash-lite", used)
+
+    @patch("llm_service.genai.Client")
+    def test_404_all_models_missing_reports_404(self, mock_client):
+        client = MagicMock()
+        client.vertexai = False
+        client.models.generate_content.side_effect = _not_found("models/gemini-9 not found")
+        mock_client.return_value = client
+        transcript = {"segments": [{"start": 1, "duration": 1, "text": "Hello"}]}
+        with self.assertRaisesRegex(AnalysisError, "404") as ctx:
+            analyze_video({"title": "T"}, transcript, "AIza.key", "gemini-9", "gemini")
+        self.assertIn("GEMINI_MODEL", str(ctx.exception))
 
 
 if __name__ == "__main__":
