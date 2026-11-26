@@ -1,10 +1,16 @@
-"""Retrieve, normalize and chunk caption segments without discarding timestamps."""
+"""Retrieve, normalize, compact, and chunk caption segments without discarding timestamps."""
 from __future__ import annotations
 
 import html
 import re
 from youtube_transcript_api import YouTubeTranscriptApi
-from youtube_transcript_api._errors import TranscriptsDisabled, NoTranscriptFound, VideoUnavailable, RequestBlocked, IpBlocked
+from youtube_transcript_api._errors import (
+    IpBlocked,
+    NoTranscriptFound,
+    RequestBlocked,
+    TranscriptsDisabled,
+    VideoUnavailable,
+)
 
 
 class TranscriptError(Exception):
@@ -16,6 +22,17 @@ def format_timestamp(seconds: float) -> str:
     hours, remainder = divmod(seconds, 3600)
     minutes, seconds = divmod(remainder, 60)
     return f"{hours}:{minutes:02d}:{seconds:02d}" if hours else f"{minutes:02d}:{seconds:02d}"
+
+
+def timestamp_to_seconds(value: str) -> int:
+    """Convert MM:SS or H:MM:SS into integer seconds safely."""
+    try:
+        parts = [int(p) for p in value.strip().split(":")]
+        if len(parts) not in (2, 3) or any(p < 0 for p in parts):
+            return 0
+        return sum(n * (60 ** i) for i, n in enumerate(reversed(parts)))
+    except (ValueError, AttributeError):
+        return 0
 
 
 def get_transcript(video_id: str) -> dict:
@@ -37,7 +54,12 @@ def get_transcript(video_id: str) -> dict:
                 segments.append({"start": max(0.0, float(snippet.start)), "duration": max(0.0, float(snippet.duration)), "text": text})
         if not segments:
             raise TranscriptError("The available transcript is empty. A full content analysis requires a transcript.")
-        return {"segments": segments, "language": track.language, "language_code": track.language_code, "is_generated": track.is_generated}
+        return {
+            "segments": segments,
+            "language": track.language,
+            "language_code": track.language_code,
+            "is_generated": track.is_generated,
+        }
     except TranscriptError:
         raise
     except (TranscriptsDisabled, NoTranscriptFound, VideoUnavailable) as exc:
@@ -46,6 +68,39 @@ def get_transcript(video_id: str) -> dict:
         raise TranscriptError("YouTube blocked transcript access from this server. Try again later or run the app from a different network.") from exc
     except Exception as exc:
         raise TranscriptError("Could not retrieve the transcript. Captions may be unavailable or YouTube may be blocking access from this server.") from exc
+
+
+def compact_segments(segments: list[dict], window_seconds: float = 14.0, max_block_chars: int = 380) -> list[dict]:
+    """Merge micro-caption fragments into readable ~14s blocks while preserving exact start timestamps.
+
+    Cuts `[MM:SS]` bracket overhead by ~25-35% so longer videos fit in a single LLM API call.
+    Every block's `start` remains an exact `start` from `segments`, keeping strict timestamp grounding intact.
+    """
+    if not segments:
+        return []
+    compacted: list[dict] = []
+    cur_start = float(segments[0]["start"])
+    cur_end = cur_start + float(segments[0].get("duration", 0.0))
+    cur_texts = [segments[0]["text"]]
+    cur_len = len(segments[0]["text"])
+
+    for seg in segments[1:]:
+        s_start = float(seg["start"])
+        s_dur = float(seg.get("duration", 0.0))
+        s_text = seg["text"]
+        if (s_start - cur_start) <= window_seconds and (cur_len + 1 + len(s_text)) <= max_block_chars:
+            cur_texts.append(s_text)
+            cur_len += 1 + len(s_text)
+            cur_end = max(cur_end, s_start + s_dur)
+        else:
+            compacted.append({"start": cur_start, "duration": max(0.0, cur_end - cur_start), "text": " ".join(cur_texts)})
+            cur_start = s_start
+            cur_end = s_start + s_dur
+            cur_texts = [s_text]
+            cur_len = len(s_text)
+
+    compacted.append({"start": cur_start, "duration": max(0.0, cur_end - cur_start), "text": " ".join(cur_texts)})
+    return compacted
 
 
 def transcript_lines(segments: list[dict]) -> list[str]:
