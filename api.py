@@ -15,9 +15,21 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
 from analytics_service import build_dashboard_analytics
-from llm_service import AnalysisError, DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, analyze_video_dashboard
+from llm_service import (
+    AnalysisError,
+    DEFAULT_MODEL,
+    GEMINI_DEFAULT_MODEL,
+    analyze_video_dashboard,
+    analyze_youtube_url_via_gemini,
+)
 from sample_data import SAMPLES
-from transcript_service import TranscriptError, format_timestamp, get_transcript
+from transcript_service import (
+    TranscriptBlockedError,
+    TranscriptError,
+    format_timestamp,
+    get_transcript,
+    parse_pasted_transcript,
+)
 from youtube_service import YouTubeError, extract_video_id, fetch_video_metadata_smart
 
 load_dotenv()
@@ -48,6 +60,7 @@ class AnalyzeRequest(BaseModel):
     model: str | None = Field(default=None, max_length=200)
     api_key: str | None = Field(default=None, max_length=500, description="Optional runtime LLM API key override")
     yt_key: str | None = Field(default=None, max_length=500, description="Optional YouTube Data API v3 key")
+    manual_transcript: str | None = Field(default=None, max_length=400000, description="Optional pasted transcript when cloud IP is blocked")
     force_refresh: bool = Field(default=False)
 
 
@@ -216,28 +229,57 @@ def analyze_endpoint(req: AnalyzeRequest) -> dict:
             }
             return response_copy
 
-    # Fetch metadata and transcript in parallel to cut network wait time in half
+    # Fetch metadata and transcript in parallel (with Cloud-IP Gemini Direct fallback & manual paste support)
+    pasted = (req.manual_transcript or "").strip()
+    raw_transcript = None
+    analysis = None
+    llm_calls = 0
+
     try:
-        with ThreadPoolExecutor(max_workers=2) as pool:
-            meta_future = pool.submit(fetch_video_metadata_smart, video_id, yt_key)
-            transcript_future = pool.submit(get_transcript, video_id)
-            metadata, yt_calls = meta_future.result()
-            raw_transcript = transcript_future.result()
+        if pasted:
+            metadata, yt_calls = fetch_video_metadata_smart(video_id, yt_key)
+            raw_transcript = parse_pasted_transcript(pasted)
+        else:
+            with ThreadPoolExecutor(max_workers=2) as pool:
+                meta_future = pool.submit(fetch_video_metadata_smart, video_id, yt_key)
+                transcript_future = pool.submit(get_transcript, video_id)
+                metadata, yt_calls = meta_future.result()
+                try:
+                    raw_transcript = transcript_future.result()
+                except TranscriptBlockedError as blocked_exc:
+                    # Cloud-IP bypass: if Gemini key is active, let Google Gemini ingest the YouTube URL directly!
+                    fallback_gemini_key = llm_key if provider == "gemini" else _env_setting("GEMINI_API_KEY")
+                    if not fallback_gemini_key:
+                        raise blocked_exc
+                    gemini_model = model if provider == "gemini" else (_env_setting("GEMINI_MODEL") or GEMINI_DEFAULT_MODEL)
+                    analysis, raw_transcript, llm_calls = analyze_youtube_url_via_gemini(
+                        metadata=metadata,
+                        video_id=video_id,
+                        api_key=fallback_gemini_key,
+                        model=gemini_model,
+                    )
+                    provider = "gemini"
+                    model = gemini_model
     except YouTubeError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except TranscriptBlockedError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except TranscriptError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
-
-    try:
-        analysis, llm_calls = analyze_video_dashboard(
-            metadata=metadata,
-            transcript=raw_transcript,
-            api_key=llm_key,
-            model=model,
-            provider=provider,
-        )
     except AnalysisError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    if analysis is None:
+        try:
+            analysis, llm_calls = analyze_video_dashboard(
+                metadata=metadata,
+                transcript=raw_transcript,
+                api_key=llm_key,
+                model=model,
+                provider=provider,
+            )
+        except AnalysisError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     analytics = build_dashboard_analytics(metadata, raw_transcript, analysis)
     formatted_segments = [
