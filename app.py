@@ -10,7 +10,7 @@ from dotenv import load_dotenv
 
 from youtube_service import YouTubeError, extract_video_id, fetch_video_metadata, format_duration
 from transcript_service import TranscriptError, format_timestamp, get_transcript
-from llm_service import AnalysisError, DEFAULT_MODEL, analyze_video
+from llm_service import AnalysisError, DEFAULT_MODEL, GEMINI_DEFAULT_MODEL, analyze_video
 
 load_dotenv()
 st.set_page_config(page_title="Video Analyzer", page_icon="▶", layout="wide", initial_sidebar_state="collapsed")
@@ -74,8 +74,8 @@ def cached_transcript(video_id: str) -> dict:
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
-def cached_analysis(metadata: dict, transcript: dict, key: str, model: str) -> dict:
-    return analyze_video(metadata, transcript, key, model)
+def cached_analysis(metadata: dict, transcript: dict, key: str, model: str, provider: str) -> dict:
+    return analyze_video(metadata, transcript, key, model, provider)
 
 
 def published_date(value: str) -> str:
@@ -187,14 +187,20 @@ if submitted:
     try:
         video_id = extract_video_id(url)
         yt_key = setting("YT_KEY")
-        openrouter_key = setting("OPENROUTER_API_KEY")
-        if not yt_key or not openrouter_key:
-            raise ValueError("Add YT_KEY and OPENROUTER_API_KEY to your .env file or Streamlit secrets before analyzing. See the README for setup.")
+        provider = setting("LLM_PROVIDER", "openrouter").lower()
+        if provider not in {"openrouter", "gemini"}:
+            raise ValueError("LLM_PROVIDER must be openrouter or gemini. Check your .env file or Streamlit secrets.")
+        key_name = "OPENROUTER_API_KEY" if provider == "openrouter" else "GEMINI_API_KEY"
+        model_name = "OPENROUTER_MODEL" if provider == "openrouter" else "GEMINI_MODEL"
+        default_model = DEFAULT_MODEL if provider == "openrouter" else GEMINI_DEFAULT_MODEL
+        llm_key = setting(key_name)
+        if not yt_key or not llm_key:
+            raise ValueError(f"Add YT_KEY and {key_name} to your .env file or Streamlit secrets before analyzing. See the README for setup.")
         with st.spinner("Fetching video details and captions, then preparing your analysis. Longer videos may take a few minutes…"):
             metadata = cached_metadata(video_id, yt_key)
             st.session_state["metadata"] = metadata
             transcript = cached_transcript(video_id)
-            analysis = cached_analysis(metadata, transcript, openrouter_key, setting("OPENROUTER_MODEL", DEFAULT_MODEL))
+            analysis = cached_analysis(metadata, transcript, llm_key, setting(model_name, default_model), provider)
             st.session_state["result"] = (metadata, transcript, analysis)
     except (ValueError, YouTubeError, TranscriptError, AnalysisError) as exc:
         st.session_state["error"] = str(exc)
